@@ -14,10 +14,12 @@
 	# collector trusts precisely because nothing else can reach it.
 	reverse_proxy 127.0.0.1:@PORT@
 
+	# Access log to the journal rather than a file under /var/log/caddy. A file needs a
+	# directory Caddy's own user can write, which depends on both ownership and whatever
+	# ProtectSystem the packaged unit ships — and `caddy validate` does not check either,
+	# so a permission problem only surfaces as a failed start. journalctl -u caddy works
+	# regardless.
 	log {
-		output file /var/log/caddy/ipreport.log {
-			roll_size 10MiB
-			roll_keep 5
-		}
+		output stderr
 	}
 }

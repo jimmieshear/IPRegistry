@@ -147,12 +147,8 @@ if [[ -z "$ADMIN_PASSWORD" ]]; then
 fi
 PASSWORD_HASH="$(caddy hash-password --plaintext "$ADMIN_PASSWORD")"
 
-install -d -m 755 /var/log/caddy
-chown caddy:caddy /var/log/caddy 2>/dev/null || true
-
 [[ -f /etc/caddy/Caddyfile && ! -f /etc/caddy/Caddyfile.orig ]] && \
     cp /etc/caddy/Caddyfile /etc/caddy/Caddyfile.orig
-
 # The password hash contains $ and / — write it with awk rather than sed to avoid
 # escaping games.
 export HOSTNAME_ARG ADMIN_USER PASSWORD_HASH PORT
@@ -164,12 +160,28 @@ awk '{
     print
 }' "$SCRIPT_DIR/Caddyfile.template" > /etc/caddy/Caddyfile
 
+# `caddy validate` only checks that the config parses. It does not try to open log files
+# or bind ports, so a valid config can still fail to load — which is why the start below
+# is verified rather than assumed.
 caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null || {
-    echo "the generated Caddyfile is invalid; leaving the previous config in place" >&2
+    echo "the generated Caddyfile is invalid" >&2
+    if [[ -f /etc/caddy/Caddyfile.orig ]]; then
+        cp /etc/caddy/Caddyfile.orig /etc/caddy/Caddyfile
+        echo "restored the previous config" >&2
+    fi
     exit 1
 }
-systemctl reload caddy 2>/dev/null || systemctl restart caddy
+
 systemctl enable caddy >/dev/null 2>&1 || true
+systemctl reload caddy 2>/dev/null || systemctl restart caddy
+sleep 1
+if ! systemctl is-active --quiet caddy; then
+    echo "" >&2
+    echo "Caddy did not start, so no certificate was requested. Recent log:" >&2
+    journalctl -u caddy -n 30 --no-pager >&2
+    exit 1
+fi
+echo "Caddy active"
 
 # ---------------------------------------------------------------- firewall
 
@@ -200,13 +212,21 @@ else
 fi
 
 echo "waiting up to 60s for the certificate"
+TLS_OK=0
 for _ in $(seq 1 30); do
     if curl -fsS --max-time 5 "https://$HOSTNAME_ARG/healthz" -u "$ADMIN_USER:$ADMIN_PASSWORD" >/dev/null 2>&1; then
+        TLS_OK=1
         echo "HTTPS is live with a valid certificate"
         break
     fi
     sleep 2
 done
+
+if [[ $TLS_OK -eq 0 ]]; then
+    warn "no working certificate yet. Everything else is installed; Caddy keeps retrying."
+    warn "Most likely: DNS for $HOSTNAME_ARG is wrong, or port 80 is blocked inbound."
+    echo "Watch it with:  journalctl -u caddy -f" >&2
+fi
 
 cat <<EOF
 
