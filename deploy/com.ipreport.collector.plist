@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.ipreport.collector</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>@PREFIX@/libexec/ipcollector</string>
+        <string>--port</string>
+        <string>@PORT@</string>
+        <string>--token-file</string>
+        <string>@PREFIX@/etc/ipreport/token</string>
+        <string>--state</string>
+        <string>@PREFIX@/var/ipreport/state.json</string>
+        <string>--title</string>
+        <string>@TITLE@</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>ProcessType</key>
+    <string>Adaptive</string>
+
+    <key>StandardOutPath</key>
+    <string>@PREFIX@/var/log/ipcollector.log</string>
+    <key>StandardErrorPath</key>
+    <string>@PREFIX@/var/log/ipcollector.log</string>
+</dict>
+</plist>
