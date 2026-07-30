@@ -42,7 +42,7 @@ endif
 
 .PHONY: all help build release release-native test clean token \
         install-collector install-reporter uninstall-collector uninstall-reporter \
-        package-reporter sdk-install linux package-collector
+        package-reporter sdk-install sdk-probe linux package-collector package-source
 
 all: build
 
@@ -55,9 +55,11 @@ help:
 	@echo "make package-reporter  tarball to copy to fleet machines"
 	@echo ""
 	@echo "Linux collector (for the VPS):"
-	@echo "  make sdk-install         one-time: install the static Linux SDK"
+	@echo "  make package-source      tarball the VPS builds from   <-- simplest"
+	@echo "  make sdk-probe           look for a usable static Linux SDK URL"
+	@echo "  make sdk-install         install the static Linux SDK (needs a swift.org toolchain)"
 	@echo "  make linux               cross-compile a static ipcollector for x86_64 Linux"
-	@echo "  make package-collector   tarball to scp to the VPS"
+	@echo "  make package-collector   tarball a cross-compiled binary for the VPS"
 	@echo ""
 	@echo "sudo make install-collector"
 	@echo "sudo make install-reporter COLLECTOR=http://host:8710 TOKEN=secret"
@@ -84,6 +86,44 @@ test:
 	swift test $(SWIFT_FLAGS) $(TEST_FLAGS)
 
 # ---------------------------------------------------------------- Linux collector
+
+# Ship the source and let the VPS build it. Preferred over cross-compiling: the Static
+# Linux SDK is published against swift.org toolchains, so using it from an Xcode toolchain
+# means installing a second Swift plus a version-matched SDK. This has no such coupling.
+package-source:
+	@rm -rf dist/mac-ip-registry
+	@mkdir -p dist/mac-ip-registry
+	@cp Package.swift Makefile README.md dist/mac-ip-registry/
+	@cp -R Sources Tests deploy dist/mac-ip-registry/
+	@rm -f dist/mac-ip-registry/deploy/linux/ipcollector
+	@tar -czf dist/mac-ip-registry-src.tar.gz -C dist mac-ip-registry
+	@rm -rf dist/mac-ip-registry
+	@echo "built dist/mac-ip-registry-src.tar.gz ($$(du -h dist/mac-ip-registry-src.tar.gz | cut -f1))"
+	@echo ""
+	@echo "  scp dist/mac-ip-registry-src.tar.gz root@YOUR.VPS:"
+	@echo "  ssh root@YOUR.VPS"
+	@echo "    tar xzf mac-ip-registry-src.tar.gz"
+	@echo "    sudo mac-ip-registry/deploy/linux/build-on-vps.sh"
+	@echo "    sudo mac-ip-registry/deploy/linux/bootstrap-collector.sh --hostname HOST"
+
+# The static SDK URL moves between releases, and it must match the toolchain. Run this
+# from a machine with network access to find one that exists.
+sdk-probe:
+	@echo "local toolchain: $$(swift --version 2>&1 | head -1)"
+	@echo "probing download.swift.org ..."
+	@found=0; \
+	for v in $(SWIFT_VERSION) 6.3.2 6.3.1 6.3.0 6.2.3 6.2.2 6.2.1 6.2.0 6.1.2 6.0.3; do \
+	  for b in 0.0.1 0.0.2 0.0.3; do \
+	    u="https://download.swift.org/swift-$$v-release/static-sdk/swift-$$v-RELEASE/swift-$$v-RELEASE_static-linux-$$b.artifactbundle.tar.gz"; \
+	    code=$$(curl -fsSL --range 0-0 -o /dev/null -w '%{http_code}' "$$u" 2>/dev/null || echo 000); \
+	    case "$$code" in 200|206) echo "  FOUND  $$u"; found=1 ;; esac; \
+	  done; \
+	done; \
+	test $$found -eq 1 || echo "  nothing found — check https://www.swift.org/install/macos/"
+	@echo ""
+	@echo "Note: a swift.org SDK expects a swift.org toolchain. With Xcode's Swift the"
+	@echo "cross-build will likely fail a version check even with a valid URL."
+	@echo "If so, use 'make package-source' and build on the VPS instead."
 
 # One-time. The SDK must match the toolchain: a 6.3.3 toolchain needs the 6.3.3 SDK, or
 # the cross-build fails with module-format errors.

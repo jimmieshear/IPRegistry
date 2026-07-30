@@ -80,22 +80,35 @@ Mac (private 10.x)  ──HTTPS POST /report──▶  VPS :443  Caddy ──▶
 Caddy is the only thing that can talk to it. Port 8710 needs no firewall rule and must not
 get one.
 
-**One-time, on your Mac** — install the static Linux SDK. The VPS never needs a Swift
-toolchain, and a 1GB VPS cannot realistically compile Swift anyway.
+**On your Mac** — ship the source; the VPS builds it:
 
 ```sh
-make sdk-install          # must match your local toolchain version
-make package-collector    # builds the static binary and tars up the deploy files
-scp dist/ipcollector.tar.gz root@your.vps:
+make package-source
+scp dist/mac-ip-registry-src.tar.gz root@your.vps:
 ```
 
 **On the VPS** — one A record must already point at it, because Let's Encrypt validates
 over HTTP and will not issue for a bare IP:
 
 ```sh
-tar xzf ipcollector.tar.gz
-./ipcollector/bootstrap-collector.sh --hostname ipreg.example.com
+tar xzf mac-ip-registry-src.tar.gz
+sudo mac-ip-registry/deploy/linux/build-on-vps.sh
+sudo mac-ip-registry/deploy/linux/bootstrap-collector.sh --hostname ipreg.example.com
 ```
+
+`build-on-vps.sh` installs Swift via swiftly, builds `ipcollector` with
+`--static-swift-stdlib`, and tells you how to remove the ~2GB toolchain afterwards, since
+the finished binary does not need it. On a small VPS it adds a 3GB swapfile first —
+`swift-frontend` wants more than 1GB of RAM, and swap is the cheap fix when you have disk
+to spare. It compiles at `-j1` by default for the same reason.
+
+### Cross-compiling instead
+
+There is a `make sdk-install` / `make linux` / `make package-collector` path that produces
+a static Linux binary on your Mac. It is only worth it if you already run a **swift.org**
+toolchain: the Static Linux SDK is published against those, and using it from Xcode's Swift
+generally fails a toolchain version check. `make sdk-probe` will tell you whether a usable
+SDK URL exists for your version. Building on the VPS avoids the whole question.
 
 That installs Caddy from its official repo, creates an `ipreport` system user, installs a
 hardened systemd unit, generates the shared secret and a dashboard password, writes and
