@@ -102,7 +102,7 @@ public final class HTTPServer: @unchecked Sendable {
 
             if candidate.pointee.ai_family == AF_INET6 {
                 var dualStack: Int32 = 0
-                setsockopt(descriptor, Int32(IPPROTO_IPV6), IPV6_V6ONLY, &dualStack, socklen_t(MemoryLayout<Int32>.size))
+                setsockopt(descriptor, Int32(IPPROTO_IPV6), Int32(IPV6_V6ONLY), &dualStack, socklen_t(MemoryLayout<Int32>.size))
             }
 
             if bind(descriptor, candidate.pointee.ai_addr, candidate.pointee.ai_addrlen) != 0 {
@@ -246,17 +246,20 @@ public final class HTTPServer: @unchecked Sendable {
         private let lock = NSLock()
         private var stored: HTTPResponse?
 
+        // Explicit lock/unlock rather than a `withLock` helper: Foundation gained its own
+        // NSLock.withLock, and a local one of the same name is an ambiguity waiting to
+        // happen on whichever platform has it.
         var value: HTTPResponse? {
-            get { lock.withLock { stored } }
-            set { lock.withLock { stored = newValue } }
+            get {
+                lock.lock()
+                defer { lock.unlock() }
+                return stored
+            }
+            set {
+                lock.lock()
+                stored = newValue
+                lock.unlock()
+            }
         }
-    }
-}
-
-private extension NSLock {
-    func withLock<T>(_ body: () -> T) -> T {
-        lock()
-        defer { unlock() }
-        return body()
     }
 }

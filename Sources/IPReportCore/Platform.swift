@@ -43,6 +43,31 @@ public func errnoDescription(_ code: Int32 = errno) -> String {
     return "\(String(cString: text)) (errno \(code))"
 }
 
+/// Writes straight to a file descriptor, looping over short writes.
+///
+/// Deliberately not `stdout`/`stderr`: Glibc declares those as stored global `var`s, which
+/// Swift 6 strict concurrency rejects as shared mutable state. `write(2)` is also
+/// unbuffered, so there is no flush to forget and lines from concurrent connections do not
+/// interleave.
+public func writeToDescriptor(_ descriptor: Int32, _ text: String) {
+    let bytes = Array(text.utf8)
+    var offset = 0
+    while offset < bytes.count {
+        let written = bytes.withUnsafeBytes { raw -> Int in
+            guard let base = raw.baseAddress else { return -1 }
+            return write(descriptor, base.advanced(by: offset), bytes.count - offset)
+        }
+        if written <= 0 {
+            if written < 0, errno == EINTR { continue }
+            return
+        }
+        offset += written
+    }
+}
+
+public func writeStandardOutput(_ text: String) { writeToDescriptor(1, text) }
+public func writeStandardError(_ text: String) { writeToDescriptor(2, text) }
+
 public enum Platform {
     /// The system hostname as `gethostname(2)` reports it. Available on both platforms,
     /// unlike the IORegistry lookups the reporter uses for hardware identity.

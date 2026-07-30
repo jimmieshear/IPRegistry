@@ -1,4 +1,10 @@
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 import CollectorKit
+import Dispatch
 import Foundation
 import IPReportCore
 
@@ -15,7 +21,7 @@ struct Collector {
             options = parsed
         } catch let CollectorError.usage(message) {
             Log.error(message)
-            FileHandle.standardError.write(Data("\n\(usage)\n".utf8))
+            writeStandardError("\n\(usage)\n")
             exit(2)
         } catch {
             Log.error("\(error)")
@@ -140,7 +146,7 @@ struct Collector {
             let argument = arguments[index]
             switch argument {
             case "-h", "--help":
-                print(usage)
+                writeStandardOutput(usage + "\n")
                 return nil
             case "--port":
                 let raw = try next(argument)

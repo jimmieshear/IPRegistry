@@ -25,8 +25,12 @@ public enum NetworkScan {
         while let entry = cursor {
             defer { cursor = entry.pointee.ifa_next }
 
+            // IFF_* import as Int32 on Darwin but Int on Glibc, so widen explicitly.
             let flags = Int32(bitPattern: entry.pointee.ifa_flags)
-            guard flags & IFF_UP != 0, flags & IFF_RUNNING != 0, flags & IFF_LOOPBACK == 0 else { continue }
+            guard flags & Int32(IFF_UP) != 0,
+                  flags & Int32(IFF_RUNNING) != 0,
+                  flags & Int32(IFF_LOOPBACK) == 0
+            else { continue }
 
             guard let socketAddress = entry.pointee.ifa_addr else { continue }
             let family = socketAddress.pointee.sa_family

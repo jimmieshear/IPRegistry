@@ -1,3 +1,8 @@
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 import Foundation
 
 public enum Wire {
@@ -62,20 +67,22 @@ public enum IPReportError: Error, CustomStringConvertible {
 /// or to the journal by systemd, so this is deliberately plain text rather than os_log.
 public enum Log {
     public static func info(_ message: String) {
-        emit("INFO", message, to: stdout)
+        emit("INFO", message, toStandardError: false)
     }
 
     public static func warn(_ message: String) {
-        emit("WARN", message, to: stderr)
+        emit("WARN", message, toStandardError: true)
     }
 
     public static func error(_ message: String) {
-        emit("ERROR", message, to: stderr)
+        emit("ERROR", message, toStandardError: true)
     }
 
-    private static func emit(_ level: String, _ message: String, to stream: UnsafeMutablePointer<FILE>) {
-        fputs("\(iso8601UTC(Date())) [\(level)] \(message)\n", stream)
-        fflush(stream)
+    /// Writes straight to the file descriptor rather than through `stdout`/`stderr`, which
+    /// Glibc declares as stored global `var`s that Swift 6 rejects as shared mutable state.
+    private static func emit(_ level: String, _ message: String, toStandardError: Bool) {
+        let line = "\(iso8601UTC(Date())) [\(level)] \(message)\n"
+        writeToDescriptor(toStandardError ? 2 : 1, line)
     }
 }
 

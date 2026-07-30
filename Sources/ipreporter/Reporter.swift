@@ -52,7 +52,7 @@ struct Reporter {
             options = parsed
         } catch {
             Log.error("\(error)")
-            FileHandle.standardError.write(Data("\n\(usage)\n".utf8))
+            writeStandardError("\n\(usage)\n")
             exit(2)
         }
 
@@ -335,7 +335,7 @@ import Glibc
 @main
 struct Reporter {
     static func main() {
-        FileHandle.standardError.write(Data("ipreporter runs on macOS only\n".utf8))
+        writeStandardError("ipreporter runs on macOS only\n")
         exit(1)
     }
 }
