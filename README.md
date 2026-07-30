@@ -110,7 +110,9 @@ toolchain: the Static Linux SDK is published against those, and using it from Xc
 generally fails a toolchain version check. `make sdk-probe` will tell you whether a usable
 SDK URL exists for your version. Building on the VPS avoids the whole question.
 
-That installs Caddy from its official repo, creates an `ipreport` system user, installs a
+### What bootstrap-collector.sh does
+
+It installs Caddy from its official repo, creates an `ipreport` system user, installs a
 hardened systemd unit, generates the shared secret and a dashboard password, writes and
 validates the Caddyfile, and stages ufw rules. It is idempotent — re-run it to change the
 hostname, rotate the password, or drop in a new binary.
@@ -143,6 +145,61 @@ directly, which is exactly why the flag is opt-in and why the collector binds lo
 journalctl -u ipcollector -f
 journalctl -u caddy -f
 systemctl restart ipcollector
+```
+
+### Verifying the deployment
+
+Work outward, so a failure tells you which layer broke.
+
+**On the VPS:**
+
+```sh
+# 1. the daemon is up and enabled for boot
+systemctl is-active ipcollector caddy      # active, active
+systemctl is-enabled ipcollector caddy     # enabled, enabled
+
+# 2. it bound where it should have
+ss -tlnp | grep 8710                       # want 127.0.0.1:8710, NOT 0.0.0.0:8710
+journalctl -u ipcollector -n 20 --no-pager # want "collector listening on 127.0.0.1:8710"
+
+# 3. it answers on loopback
+curl -s http://127.0.0.1:8710/healthz      # ok
+
+# 4. Caddy actually got a certificate
+ls /var/lib/caddy/.local/share/caddy/certificates/*/*/
+journalctl -u caddy --no-pager | grep -iE 'certificate obtained|error'
+```
+
+**From your Mac** — this is the part that proves the whole chain:
+
+```sh
+# 5. TLS works and basic auth is enforced
+curl -s -o /dev/null -w '%{http_code}\n' https://ipreg.example.com/healthz   # 401
+curl -su admin:PASSWORD https://ipreg.example.com/healthz                    # ok
+
+# 6. the collector is NOT exposed directly (should hang or refuse)
+nc -zv -w 5 <vps-ip> 8710
+
+# 7. send one real report
+sudo /usr/local/libexec/ipreporter --collector https://ipreg.example.com \
+    --token-file /usr/local/etc/ipreport/token --once
+
+# 8. confirm the proxy hop is wired correctly
+curl -su admin:PASSWORD https://ipreg.example.com/json \
+  | jq -r '.hosts[] | "\(.hostname)  private=\(.primaryAddress)  seen=\(.observedAddress)"'
+```
+
+Step 8 is the one worth reading closely. `seen` should be your **site's public egress
+address**. If it says `127.0.0.1`, `X-Forwarded-For` is not reaching the collector — check
+that the unit has `--trust-forwarded-for` and that Caddy is proxying rather than
+redirecting.
+
+Note that `/healthz` sits behind basic auth along with everything except `/report`, which
+makes anonymous uptime monitoring awkward. If you want to poll it from a monitoring service,
+change the matcher in `/etc/caddy/Caddyfile` to exempt it and reload:
+
+```
+@dashboard not path /report /healthz
 ```
 
 ## Install a reporter
