@@ -311,3 +311,4 @@ internationalization support that the static Linux SDK does not reliably carry.
   it dies you lose visibility for one heartbeat interval, not data.
 - `--forget-after` prunes on save, not on a timer, so an idle collector keeps expired rows
   until the next report arrives.
+# IPRegistry
