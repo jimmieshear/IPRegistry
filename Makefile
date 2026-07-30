@@ -24,6 +24,10 @@ SWIFT_FLAGS   ?=
 SWIFT_VERSION := $(shell swift --version 2>/dev/null | sed -n 's/.*Apple Swift version \([0-9.]*\).*/\1/p')
 LINUX_SDK     ?= x86_64-swift-linux-musl
 STATIC_SDK_URL ?= https://download.swift.org/swift-$(SWIFT_VERSION)-release/static-sdk/swift-$(SWIFT_VERSION)-RELEASE/swift-$(SWIFT_VERSION)-RELEASE_static-linux-0.0.1.artifactbundle.tar.gz
+SDK_CACHE      = .sdk-cache
+SDK_TARBALL    = $(SDK_CACHE)/$(notdir $(STATIC_SDK_URL))
+# Optional. Set it to install straight from the URL with SwiftPM verifying provenance.
+SDK_CHECKSUM  ?=
 
 DEVELOPER_DIR      := $(shell xcode-select -p 2>/dev/null)
 TESTING_FRAMEWORKS := $(DEVELOPER_DIR)/Library/Developer/Frameworks
@@ -83,10 +87,43 @@ test:
 
 # One-time. The SDK must match the toolchain: a 6.3.3 toolchain needs the 6.3.3 SDK, or
 # the cross-build fails with module-format errors.
+#
+# `swift sdk install` demands --checksum for remote URLs but not for local files, so the
+# default path downloads first and installs from disk. That is the same trust as a
+# self-computed checksum — TLS to swift.org and nothing more. Pass SDK_CHECKSUM=... (from
+# swift.org's download page) to have SwiftPM verify provenance properly instead.
 sdk-install:
 	@test -n "$(SWIFT_VERSION)" || { echo "could not determine the Swift version"; exit 1; }
-	@echo "installing the static Linux SDK for Swift $(SWIFT_VERSION)"
-	swift sdk install $(STATIC_SDK_URL)
+	@if swift sdk list 2>/dev/null | grep -q "$(LINUX_SDK)"; then \
+	    echo "$(LINUX_SDK) is already installed:"; swift sdk list; exit 0; \
+	fi
+	@echo "==> static Linux SDK for Swift $(SWIFT_VERSION)"
+ifneq ($(SDK_CHECKSUM),)
+	swift sdk install "$(STATIC_SDK_URL)" --checksum "$(SDK_CHECKSUM)"
+else
+	@mkdir -p $(SDK_CACHE)
+	@echo "==> checking that the URL exists"
+	@curl -fsSL --range 0-0 -o /dev/null "$(STATIC_SDK_URL)" || { \
+	    echo ""; \
+	    echo "Not available at:"; echo "  $(STATIC_SDK_URL)"; \
+	    echo ""; \
+	    echo "The artifactbundle version in that filename changes between releases."; \
+	    echo "Find the current Static Linux SDK URL and checksum at"; \
+	    echo "  https://www.swift.org/install/macos/"; \
+	    echo "then re-run:"; \
+	    echo "  make sdk-install STATIC_SDK_URL=<url> SDK_CHECKSUM=<checksum>"; \
+	    exit 1; }
+	@if [ -s "$(SDK_TARBALL)" ]; then \
+	    echo "==> using cached $(SDK_TARBALL)"; \
+	else \
+	    echo "==> downloading (a few hundred MB)"; \
+	    curl -fL --progress-bar -o "$(SDK_TARBALL).part" "$(STATIC_SDK_URL)" && mv "$(SDK_TARBALL).part" "$(SDK_TARBALL)"; \
+	fi
+	@echo "==> checksum of the downloaded file (compare with swift.org if you want provenance):"
+	@swift package compute-checksum "$(SDK_TARBALL)"
+	@echo "==> installing from the local file"
+	swift sdk install "$(SDK_TARBALL)"
+endif
 	@swift sdk list
 
 linux:

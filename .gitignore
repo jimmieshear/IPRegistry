@@ -1,6 +1,7 @@
 .build/
 .swiftpm/
 dist/
+.sdk-cache/
 *.xcodeproj
 .DS_Store
 deploy/token
