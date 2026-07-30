@@ -3,12 +3,13 @@
 A live registry of the current IP addresses of a fleet of Macs, for when machines reboot
 or cycle DNS and you need to know where they went.
 
-Two Swift binaries, no external dependencies, nothing leaves your network:
+Two Swift binaries, no external package dependencies:
 
-- **`ipreporter`** — a LaunchDaemon on each machine. Pushes its addresses on boot, on
-  every link change, and on a heartbeat.
-- **`ipcollector`** — a LaunchDaemon on one always-on Mac. Keeps the current state and
-  serves a dashboard you can open in a browser.
+- **`ipreporter`** — a LaunchDaemon on each Mac. Pushes its addresses on boot, on every
+  link change, and on a heartbeat. macOS only.
+- **`ipcollector`** — keeps the current state and serves a dashboard. Runs on macOS under
+  launchd, or on Linux under systemd — the transport is POSIX sockets, so the same source
+  cross-compiles to a static Linux binary for a VPS.
 
 ```
 GET  /                  HTML dashboard, auto-refreshing
@@ -36,8 +37,9 @@ Requires Swift 6 (Xcode 16+ or Command Line Tools).
 
 ```sh
 make build      # debug
-make release    # universal binary, arm64 + x86_64
-make test       # 49 tests
+make release    # universal macOS binary, arm64 + x86_64
+make test       # 54 tests
+make linux      # static x86_64 Linux ipcollector (needs 'make sdk-install' once)
 ```
 
 `make release` produces a universal binary so one build covers Apple silicon and Intel
@@ -47,7 +49,7 @@ because `swift build --arch arm64 --arch x86_64` needs xcbuild from full Xcode.
 In a sandboxed CI environment where SwiftPM cannot sandbox its own manifest evaluation,
 pass `SWIFT_FLAGS=--disable-sandbox`.
 
-## Install the collector
+## Install the collector on a Mac
 
 Pick a Mac that is always on and has a stable address — the reporters need to reach it by
 a name or IP that does not itself change.
@@ -63,6 +65,71 @@ every reporter needs it.
 
 ```sh
 sudo cat /usr/local/etc/ipreport/token   # print it again later
+```
+
+## Install the collector on a Linux VPS
+
+Use this when the machines are behind NAT with no inbound path — they can reach a VPS even
+though you cannot reach them. The collector sits behind Caddy, which terminates TLS.
+
+```
+Mac (private 10.x)  ──HTTPS POST /report──▶  VPS :443  Caddy ──▶ 127.0.0.1:8710 ipcollector
+```
+
+`ipcollector` binds **loopback only**, so it is not reachable from the internet at all;
+Caddy is the only thing that can talk to it. Port 8710 needs no firewall rule and must not
+get one.
+
+**One-time, on your Mac** — install the static Linux SDK. The VPS never needs a Swift
+toolchain, and a 1GB VPS cannot realistically compile Swift anyway.
+
+```sh
+make sdk-install          # must match your local toolchain version
+make package-collector    # builds the static binary and tars up the deploy files
+scp dist/ipcollector.tar.gz root@your.vps:
+```
+
+**On the VPS** — one A record must already point at it, because Let's Encrypt validates
+over HTTP and will not issue for a bare IP:
+
+```sh
+tar xzf ipcollector.tar.gz
+./ipcollector/bootstrap-collector.sh --hostname ipreg.example.com
+```
+
+That installs Caddy from its official repo, creates an `ipreport` system user, installs a
+hardened systemd unit, generates the shared secret and a dashboard password, writes and
+validates the Caddyfile, and stages ufw rules. It is idempotent — re-run it to change the
+hostname, rotate the password, or drop in a new binary.
+
+Two deliberate choices in that script: it **stages ufw rules without enabling ufw** (and
+allows SSH first), because enabling a firewall on a remote box is how people lock
+themselves out; and it **checks DNS before touching Caddy**, warning you rather than
+letting the certificate request fail confusingly.
+
+Then point the reporters at it:
+
+```sh
+sudo make install-reporter COLLECTOR=https://ipreg.example.com TOKEN=<secret>
+```
+
+The reporter needs no code change for TLS — `URLSession` uses the system trust store.
+
+### How auth splits behind the proxy
+
+- `POST /report` passes straight through Caddy and is protected by the **bearer token**.
+- Everything else — dashboard, `/json`, `/ip/` — sits behind Caddy **basic auth**, so a
+  browser gives you a normal password prompt instead of requiring a header.
+
+The collector runs with `--trust-forwarded-for`, so the client address comes from
+`X-Forwarded-For` rather than the socket peer, which would otherwise be `127.0.0.1` for
+every machine. That header is trivially forged by anyone who can reach the collector
+directly, which is exactly why the flag is opt-in and why the collector binds loopback.
+
+```sh
+journalctl -u ipcollector -f
+journalctl -u caddy -f
+systemctl restart ipcollector
 ```
 
 ## Install a reporter
@@ -131,10 +198,11 @@ VPN, that is the address that actually reaches you; picking the first entry from
 `getifaddrs` is a coin flip. If the lookup returns loopback (which it does when the
 reporter runs on the collector's own Mac) it falls back to the interface scan.
 
-**The collector also records the peer address it saw.** When that differs from what the
-machine reported, the dashboard flags the row `NAT` — there is address translation or a
-VPN between you and that machine, so the reported address will not work from where you
-are sitting.
+**The collector also records the address it saw the report arrive from.** Behind a reverse
+proxy that comes from `X-Forwarded-For`; otherwise it is the socket peer. When it differs
+from the reported address, the dashboard shows it in the "Seen from" column — with the
+collector on a VPS, every machine at a site shares one egress IP, so a difference is the
+normal case rather than a warning. The reported private address stays the useful one.
 
 ## Records are keyed by hardware, not hostname
 
@@ -155,18 +223,29 @@ for three months shows a recent heartbeat and an IP that changed 92 days ago.
 
 ## Security
 
-Plain HTTP with a bearer token on the write path, which is what an internal network
-warrants. Worth understanding what that does and does not buy:
+The write path is a bearer token, compared in constant time; it stops anyone who can reach
+the collector from poisoning the table with false entries. What else you need depends
+entirely on where the collector sits.
 
-- The token stops anyone on the LAN from poisoning the table with false entries. It is
-  compared in constant time.
-- Reads are open by default, so you can just open the page. `--require-auth-reads` puts
-  the dashboard, `/json` and `/ip/` behind the same token.
-- Nothing is encrypted. Anyone who can sniff your network can see which machines are at
-  which addresses — an inventory of the network they are already on. If that matters,
-  terminate TLS in front of the collector rather than teaching it certificate handling.
-- The secret lives in a `0600` root-owned file, never in the plist or the JSON config,
-  because LaunchDaemon plists are world-readable.
+**On an internal LAN**, plain HTTP with that token is a reasonable trade. Reads are open by
+default so you can just open the page; `--require-auth-reads` puts the dashboard, `/json`
+and `/ip/` behind the same token. Nothing is encrypted, so anyone sniffing the network can
+see which machines are at which addresses — an inventory of a network they are already on.
+
+**On a public VPS, plain HTTP is not acceptable** and the bootstrap script does not offer
+it. Without TLS the token crosses the open internet in cleartext on every heartbeat, and
+one captured request grants indefinite write access; the dashboard would also be a
+world-readable map of your internal network. Hence Caddy, TLS, basic auth on the dashboard,
+and a collector bound to loopback.
+
+In both cases the secret lives in a `0600`/`0640` root-owned file, never in the plist,
+the systemd unit, or the JSON config — LaunchDaemon plists and systemd units are
+world-readable.
+
+Worth being explicit about what this still does not do: there is no per-machine identity,
+so any holder of the shared token can write a record for any hostname. Rotating the secret
+means touching every machine. For a fleet where that matters, put a client certificate on
+each Mac and let Caddy verify it.
 
 ## Operating it
 
@@ -192,17 +271,24 @@ sudo deploy/uninstall.sh collector --purge   # also discard state and logs
 ## Layout
 
 ```
-Sources/IPReportCore/    models, wire format, minimal HTTP, sysctl/IOKit/getifaddrs
-Sources/CollectorKit/    store, router, dashboard — everything that isn't a socket
-Sources/ipcollector/     NWListener plumbing and argument parsing
-Sources/ipreporter/      the client daemon
-Tests/                   49 tests over the HTTP surface, store semantics and helpers
-deploy/                  LaunchDaemon plists, installers, log rotation
+Sources/IPReportCore/    models, wire format, minimal HTTP, portable libc helpers
+Sources/CollectorKit/    store, router, dashboard, POSIX socket server
+Sources/ipcollector/     argument parsing and startup (macOS + Linux)
+Sources/ipreporter/      the client daemon, plus the IOKit/sysctl lookups (macOS only)
+Tests/                   54 tests over the HTTP surface, store semantics and helpers
+deploy/                  LaunchDaemon plists, macOS installers, log rotation
+deploy/linux/            systemd unit, Caddyfile template, VPS bootstrap
 ```
 
 The collector's routing, storage, and rendering live in `CollectorKit` rather than in the
-executable, so the entire HTTP surface — every status code, the auth checks, HTML escaping
-— is tested without binding a port.
+executable, so the entire HTTP surface — every status code, the auth checks, HTML escaping,
+the `X-Forwarded-For` handling — is tested without binding a port. That split is also what
+made the Linux port cheap: only the transport changed.
+
+Two portability notes, both deliberate: timestamps go through `gmtime_r`/`strftime` rather
+than `ISO8601DateFormatter`, and hostname sorting uses a plain lowercased comparison rather
+than `localizedCaseInsensitiveCompare`, because both Foundation APIs depend on
+internationalization support that the static Linux SDK does not reliably carry.
 
 ## Limits
 

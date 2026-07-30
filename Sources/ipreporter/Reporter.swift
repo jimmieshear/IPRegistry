@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 import IPReportCore
 import Network
@@ -321,3 +322,21 @@ struct Reporter {
         )
     }
 }
+
+#else
+import Foundation
+#if canImport(Glibc)
+import Glibc
+#endif
+
+// The reporter reads the IORegistry and watches NWPathMonitor, so it is macOS-only. This
+// stub exists so that cross-compiling the whole package for the Linux collector succeeds
+// instead of failing on a target nobody asked for.
+@main
+struct Reporter {
+    static func main() {
+        FileHandle.standardError.write(Data("ipreporter runs on macOS only\n".utf8))
+        exit(1)
+    }
+}
+#endif

@@ -13,11 +13,12 @@ public enum Router {
         now: Date = Date()
     ) async -> HTTPResponse {
         let authorized = request.bearerToken.map { Wire.constantTimeEquals($0, token) } ?? false
+        let client = clientAddress(request, peer: peer, trustForwardedFor: options.trustForwardedFor)
 
         switch (request.method, request.path) {
         case ("POST", "/report"):
             guard authorized else {
-                Log.warn("rejected unauthenticated report from \(peer ?? "unknown")")
+                Log.warn("rejected unauthenticated report from \(client ?? "unknown")")
                 return .text("unauthorized\n", status: 401)
             }
             do {
@@ -25,18 +26,18 @@ public enum Router {
                 guard !report.machineID.isEmpty, !report.hostname.isEmpty else {
                     return .text("machineID and hostname are required\n", status: 400)
                 }
-                let (record, changed) = await store.record(report, observedAddress: peer, at: now)
+                let (record, changed) = await store.record(report, observedAddress: client, at: now)
                 if changed {
                     let from = record.previousPrimaryAddress.map { "\($0) -> " } ?? ""
                     Log.info("\(report.hostname): \(from)\(report.primaryAddress ?? "unknown") via \(report.primaryInterface ?? "?")")
                 } else if options.verbose {
                     Log.info("\(report.hostname): heartbeat, still \(report.primaryAddress ?? "unknown")")
                 }
-                let ack = Acknowledgement(observedAddress: peer, changed: changed)
+                let ack = Acknowledgement(observedAddress: client, changed: changed)
                 let body = (try? Wire.encoder().encode(ack)) ?? Data("{}".utf8)
                 return .json(body)
             } catch {
-                Log.warn("malformed report from \(peer ?? "unknown"): \(error)")
+                Log.warn("malformed report from \(client ?? "unknown"): \(error)")
                 return .text("could not decode report: \(error)\n", status: 400)
             }
 
@@ -91,7 +92,7 @@ public enum Router {
                 guard let removed = await store.forget(needle) else {
                     return .text("unknown host\n", status: 404)
                 }
-                Log.info("forgot \(removed.report.hostname) on request from \(peer ?? "unknown")")
+                Log.info("forgot \(removed.report.hostname) on request from \(client ?? "unknown")")
                 return .text("forgot \(removed.report.hostname)\n")
             }
 
@@ -103,6 +104,19 @@ public enum Router {
     struct Acknowledgement: Codable {
         var observedAddress: String?
         var changed: Bool
+    }
+
+    /// Behind a reverse proxy every connection arrives from loopback, so the real client
+    /// address has to come from `X-Forwarded-For`. That header is trivially forgeable by
+    /// anyone who can reach the collector directly, so honouring it is opt-in and only
+    /// correct when the collector binds loopback and the proxy is the sole possible source.
+    static func clientAddress(_ request: HTTPRequest, peer: String?, trustForwardedFor: Bool) -> String? {
+        guard trustForwardedFor, let forwarded = request.header("x-forwarded-for") else { return peer }
+        // Left-most entry is the original client; anything after it is an intermediate proxy.
+        guard let first = forwarded.split(separator: ",").first?.trimmingCharacters(in: .whitespaces),
+              !first.isEmpty
+        else { return peer }
+        return first
     }
 
     static let unauthorizedRead = HTTPResponse(

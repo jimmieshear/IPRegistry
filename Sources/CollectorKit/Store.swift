@@ -73,9 +73,9 @@ public actor Store {
     }
 
     public func snapshot() -> [HostRecord] {
-        records.values.sorted {
-            $0.report.hostname.localizedCaseInsensitiveCompare($1.report.hostname) == .orderedAscending
-        }
+        // A plain lowercased comparison rather than localizedCaseInsensitiveCompare, which
+        // needs Foundation's internationalisation support — absent on static musl Linux.
+        records.values.sorted { $0.report.hostname.lowercased() < $1.report.hostname.lowercased() }
     }
 
     public var count: Int { records.count }

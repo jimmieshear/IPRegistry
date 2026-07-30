@@ -1,0 +1,47 @@
+[Unit]
+Description=mac-ip-registry collector
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ipreport
+Group=ipreport
+
+# Bound to loopback on purpose: Caddy is the only thing that should reach this, which is
+# also what makes --trust-forwarded-for safe. Never expose this port directly.
+ExecStart=@PREFIX@/libexec/ipcollector \
+    --bind 127.0.0.1 \
+    --port @PORT@ \
+    --token-file /etc/ipreport/token \
+    --state /var/lib/ipreport/state.json \
+    --trust-forwarded-for \
+    --title "@TITLE@"
+
+Restart=always
+RestartSec=2
+
+# stdout/stderr go to the journal: journalctl -u ipcollector -f
+StandardOutput=journal
+StandardError=journal
+
+# The collector reads one token file and writes one state file. Nothing else.
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/ipreport
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

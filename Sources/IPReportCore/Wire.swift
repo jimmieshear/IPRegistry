@@ -58,24 +58,9 @@ public enum IPReportError: Error, CustomStringConvertible {
     }
 }
 
-/// Decodes a null-terminated C buffer. `String(cString:)` on `[CChar]` is deprecated, and
-/// several BSD APIs here hand back fixed-size buffers.
-public func stringFromCBuffer(_ buffer: [CChar]) -> String {
-    let bytes = buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
-    return String(decoding: bytes, as: UTF8.self)
-}
-
-/// Timestamped line logging. LaunchDaemons capture stdout/stderr to a file, so this is
-/// deliberately plain text rather than os_log.
+/// Timestamped line logging. Both daemons have their output captured to a file by launchd
+/// or to the journal by systemd, so this is deliberately plain text rather than os_log.
 public enum Log {
-    /// ISO8601DateFormatter is not Sendable and logging is infrequent, so build one
-    /// per line rather than sharing mutable state across the daemon's tasks.
-    private static func timestamp(_ date: Date) -> String {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime]
-        return formatter.string(from: date)
-    }
-
     public static func info(_ message: String) {
         emit("INFO", message, to: stdout)
     }
@@ -89,7 +74,7 @@ public enum Log {
     }
 
     private static func emit(_ level: String, _ message: String, to stream: UnsafeMutablePointer<FILE>) {
-        fputs("\(timestamp(Date())) [\(level)] \(message)\n", stream)
+        fputs("\(iso8601UTC(Date())) [\(level)] \(message)\n", stream)
         fflush(stream)
     }
 }

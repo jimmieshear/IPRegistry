@@ -45,11 +45,13 @@ private func makeStore(forgetAfter: TimeInterval = 0) -> (Store, URL) {
 
 private func options(
     staleAfter: TimeInterval = 180,
-    requireAuthForReads: Bool = false
+    requireAuthForReads: Bool = false,
+    trustForwardedFor: Bool = false
 ) -> CollectorOptions {
     var options = CollectorOptions()
     options.staleAfter = staleAfter
     options.requireAuthForReads = requireAuthForReads
+    options.trustForwardedFor = trustForwardedFor
     return options
 }
 
@@ -59,10 +61,14 @@ private func request(
     _ method: String,
     _ target: String,
     bearer: String? = nil,
+    headers: [String: String] = [:],
     body: String = ""
 ) throws -> HTTPRequest {
     var raw = "\(method) \(target) HTTP/1.1\r\nHost: collector\r\n"
     if let bearer { raw += "Authorization: Bearer \(bearer)\r\n" }
+    for (name, value) in headers.sorted(by: { $0.key < $1.key }) {
+        raw += "\(name): \(value)\r\n"
+    }
     let bodyData = Data(body.utf8)
     raw += "Content-Length: \(bodyData.count)\r\n\r\n"
 
@@ -430,6 +436,56 @@ struct RouterTests {
         }
     }
 
+    // MARK: Reverse-proxy handling
+
+    @Test("behind a trusted proxy the client address comes from X-Forwarded-For")
+    func forwardedForHonoured() async throws {
+        let (store, _) = makeStore()
+        let payload = try Wire.encoder().encode(makeReport())
+        let response = await Router.route(
+            try request("POST", "/report", bearer: token,
+                        headers: ["X-Forwarded-For": "203.0.113.9"],
+                        body: String(decoding: payload, as: UTF8.self)),
+            peer: "127.0.0.1", store: store,
+            options: options(trustForwardedFor: true), token: token, now: epoch
+        )
+        #expect(response.status == 200)
+
+        let ack = try Wire.decoder().decode(Router.Acknowledgement.self, from: response.body)
+        // Without this, every machine behind Caddy would record 127.0.0.1.
+        #expect(ack.observedAddress == "203.0.113.9")
+        #expect(await store.lookup("buildbox-07")?.observedAddress == "203.0.113.9")
+    }
+
+    @Test("X-Forwarded-For is ignored unless explicitly trusted")
+    func forwardedForIgnoredByDefault() async throws {
+        let (store, _) = makeStore()
+        let payload = try Wire.encoder().encode(makeReport())
+        let response = await Router.route(
+            try request("POST", "/report", bearer: token,
+                        headers: ["X-Forwarded-For": "1.2.3.4"],
+                        body: String(decoding: payload, as: UTF8.self)),
+            peer: "10.0.4.22", store: store, options: options(), token: token, now: epoch
+        )
+        let ack = try Wire.decoder().decode(Router.Acknowledgement.self, from: response.body)
+        #expect(ack.observedAddress == "10.0.4.22")
+    }
+
+    @Test("the left-most X-Forwarded-For entry wins")
+    func forwardedForChain() throws {
+        let chained = try request("GET", "/", headers: ["X-Forwarded-For": "203.0.113.9, 70.0.0.1, 127.0.0.1"])
+        #expect(Router.clientAddress(chained, peer: "127.0.0.1", trustForwardedFor: true) == "203.0.113.9")
+    }
+
+    @Test("a blank or absent X-Forwarded-For falls back to the socket peer")
+    func forwardedForFallback() throws {
+        let blank = try request("GET", "/", headers: ["X-Forwarded-For": "   "])
+        #expect(Router.clientAddress(blank, peer: "127.0.0.1", trustForwardedFor: true) == "127.0.0.1")
+
+        let absent = try request("GET", "/")
+        #expect(Router.clientAddress(absent, peer: "127.0.0.1", trustForwardedFor: true) == "127.0.0.1")
+    }
+
     @Test("a hostname with HTML in it cannot inject markup into the dashboard")
     func htmlEscaping() async throws {
         let (store, _) = makeStore()
@@ -668,12 +724,19 @@ struct HelperTests {
         }
     }
 
-    @Test("this machine reports a usable identity")
-    func liveMachineIdentity() {
-        #expect(!SystemInfo.machineID.isEmpty)
-        #expect(!SystemInfo.hostname.isEmpty)
-        #expect(SystemInfo.bootTime != nil)
-        #expect(SystemInfo.model != nil)
+    @Test("this machine reports a usable hostname")
+    func liveHostname() {
+        // SystemInfo's IORegistry lookups live in the reporter target, which is macOS-only.
+        // Platform.hostname is the portable piece the collector itself depends on.
+        #expect(!Platform.hostname.isEmpty)
+        #expect(Platform.hostname != "unknown")
+    }
+
+    @Test("timestamps are RFC 3339 UTC without Foundation's formatter")
+    func timestampFormatting() {
+        #expect(iso8601UTC(Date(timeIntervalSince1970: 1_800_167_445)) == "2027-01-17T06:30:45Z")
+        #expect(iso8601UTC(Date(timeIntervalSince1970: 1_800_000_000)) == "2027-01-15T08:00:00Z")
+        #expect(iso8601UTC(Date(timeIntervalSince1970: 0)) == "1970-01-01T00:00:00Z")
     }
 
     @Test("html escaping covers the dangerous characters")

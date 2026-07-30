@@ -8,8 +8,8 @@ public enum HTMLPage {
         <table>
           <thead>
             <tr>
-              <th></th><th>Host</th><th>Address</th><th>If</th><th>Also on</th>
-              <th>Model</th><th>macOS</th><th>Uptime</th><th>Last report</th><th>IP changed</th>
+              <th></th><th>Host</th><th>Address</th><th>Also on</th><th>Seen from</th>
+              <th>macOS</th><th>Uptime</th><th>Last report</th><th>IP changed</th>
             </tr>
           </thead>
           <tbody>
@@ -18,9 +18,7 @@ public enum HTMLPage {
         </table>
         """
 
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime]
-        let timestamp = formatter.string(from: snapshot.generatedAt)
+        let timestamp = iso8601UTC(snapshot.generatedAt)
 
         return """
         <!DOCTYPE html>
@@ -115,16 +113,25 @@ public enum HTMLPage {
             .filter { $0.address != host.primaryAddress }
             .map { "\($0.address) (\($0.interface))" }
 
-        let primaryCell: String
+        let addressCell: String
         if let primary = host.primaryAddress {
-            primaryCell = "<a href=\"ssh://\(htmlEscape(primary))\">\(htmlEscape(primary))</a>"
+            addressCell = "<a href=\"ssh://\(htmlEscape(primary))\">\(htmlEscape(primary))</a>"
+                + "<span class=\"sub\">\(htmlEscape(host.primaryInterface ?? "—"))</span>"
         } else {
-            primaryCell = "<span class=\"muted\">unknown</span>"
+            addressCell = "<span class=\"muted\">unknown</span>"
         }
 
-        let mismatch = host.addressMismatch
-            ? "<span class=\"flag\" title=\"Collector saw \(htmlEscape(host.observedAddress ?? "")) — NAT or VPN in the path\">NAT</span>"
-            : ""
+        // With the collector on a VPS, every machine at a site arrives from the same
+        // egress address, so a difference here is the normal case rather than a warning.
+        // The reported private address remains the useful one.
+        let seenFrom: String
+        if let observed = host.observedAddress, !observed.isEmpty {
+            seenFrom = host.addressMismatch
+                ? htmlEscape(observed)
+                : "<span class=\"muted\">direct</span>"
+        } else {
+            seenFrom = "<span class=\"muted\">—</span>"
+        }
 
         let changed: String
         if let previous = host.previousPrimaryAddress {
@@ -139,11 +146,10 @@ public enum HTMLPage {
           <tr class="\(host.stale ? "stale" : "")">
             <td class="status"><span class="dot \(host.stale ? "down" : "up")" title="\(host.stale ? "stale" : "current")"></span></td>
             <td class="host">\(htmlEscape(host.hostname))\(localName.map { "<span class=\"sub\">\(htmlEscape($0))</span>" } ?? "")</td>
-            <td class="ip">\(primaryCell)\(mismatch)</td>
-            <td class="mono muted">\(htmlEscape(host.primaryInterface ?? "—"))</td>
+            <td class="ip">\(addressCell)</td>
             <td class="mono muted">\(secondary.isEmpty ? "—" : htmlEscape(secondary.joined(separator: ", ")))</td>
-            <td class="muted">\(htmlEscape(host.model ?? "—"))</td>
-            <td class="mono muted">\(htmlEscape(host.osVersion ?? "—"))</td>
+            <td class="mono muted">\(seenFrom)</td>
+            <td class="mono muted">\(htmlEscape(host.osVersion ?? "—"))<span class="sub">\(htmlEscape(host.model ?? ""))</span></td>
             <td class="mono muted">\(host.uptimeSeconds.map { htmlEscape(formatDuration($0)) } ?? "—")</td>
             <td class="mono">\(htmlEscape(host.lastReportAt.relativeDescription(from: now)))</td>
             <td class="mono muted">\(changed)</td>

@@ -1,0 +1,23 @@
+@HOSTNAME@ {
+	encode zstd gzip
+
+	# Two audiences, two auth schemes. Reporters POST to /report with a bearer token,
+	# so that path passes straight through. Everything else is a human with a browser
+	# and gets a normal password prompt — which keeps your internal network inventory
+	# off the public web without forcing you to inject headers by hand.
+	@dashboard not path /report
+	basic_auth @dashboard {
+		@USERNAME@ @PASSWORD_HASH@
+	}
+
+	# The collector listens only on loopback. Caddy adds X-Forwarded-For, which the
+	# collector trusts precisely because nothing else can reach it.
+	reverse_proxy 127.0.0.1:@PORT@
+
+	log {
+		output file /var/log/caddy/ipreport.log {
+			roll_size 10MiB
+			roll_keep 5
+		}
+	}
+}

@@ -1,4 +1,8 @@
+#if canImport(Darwin)
 import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 import Foundation
 
 public enum NetworkScan {
@@ -21,17 +25,17 @@ public enum NetworkScan {
         while let entry = cursor {
             defer { cursor = entry.pointee.ifa_next }
 
-            let flags = Int32(entry.pointee.ifa_flags)
+            let flags = Int32(bitPattern: entry.pointee.ifa_flags)
             guard flags & IFF_UP != 0, flags & IFF_RUNNING != 0, flags & IFF_LOOPBACK == 0 else { continue }
 
             guard let socketAddress = entry.pointee.ifa_addr else { continue }
             let family = socketAddress.pointee.sa_family
-            guard family == UInt8(AF_INET) || family == UInt8(AF_INET6) else { continue }
+            guard family == sa_family_t(AF_INET) || family == sa_family_t(AF_INET6) else { continue }
 
             let interface = String(cString: entry.pointee.ifa_name)
             if !includeNoisy, noisyInterfacePrefixes.contains(where: { interface.hasPrefix($0) }) { continue }
 
-            guard let address = numericHost(socketAddress, length: socklen_t(socketAddress.pointee.sa_len)) else {
+            guard let address = numericHost(socketAddress, length: addressLength(socketAddress)) else {
                 continue
             }
             if address.hasPrefix("169.254.") { continue }
@@ -41,7 +45,7 @@ public enum NetworkScan {
                 InterfaceAddress(
                     interface: interface,
                     address: address,
-                    family: family == UInt8(AF_INET) ? .ipv4 : .ipv6
+                    family: family == sa_family_t(AF_INET) ? .ipv4 : .ipv6
                 )
             )
         }
@@ -63,8 +67,8 @@ public enum NetworkScan {
     public static func sourceAddress(reaching host: String, port: UInt16) -> String? {
         var hints = addrinfo()
         hints.ai_family = AF_UNSPEC
-        hints.ai_socktype = SOCK_DGRAM
-        hints.ai_protocol = IPPROTO_UDP
+        hints.ai_socktype = datagramSocketType
+        hints.ai_protocol = Int32(IPPROTO_UDP)
 
         var list: UnsafeMutablePointer<addrinfo>?
         guard getaddrinfo(host, String(port), &hints, &list) == 0, let list else { return nil }
@@ -99,7 +103,8 @@ public enum NetworkScan {
         return nil
     }
 
-    /// Presentation form of a socket address, with any IPv6 zone identifier stripped.
+    /// Presentation form of a socket address, with any IPv6 zone identifier stripped and
+    /// IPv4-mapped IPv6 normalised back to plain IPv4.
     public static func numericHost(_ address: UnsafeMutablePointer<sockaddr>, length: socklen_t) -> String? {
         var host = [CChar](repeating: 0, count: 1025)
         guard getnameinfo(address, length, &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST) == 0 else {
@@ -109,11 +114,27 @@ public enum NetworkScan {
         if let zone = text.firstIndex(of: "%") {
             text = String(text[text.startIndex..<zone])
         }
+        for prefix in ["::ffff:", "::FFFF:"] where text.hasPrefix(prefix) {
+            text = String(text.dropFirst(prefix.count))
+        }
         return text.isEmpty ? nil : text
     }
 
+    /// `sockaddr` carries its own length on BSD; on Linux it must be derived from the family.
+    public static func addressLength(_ address: UnsafeMutablePointer<sockaddr>) -> socklen_t {
+        #if canImport(Darwin)
+        return socklen_t(address.pointee.sa_len)
+        #else
+        switch address.pointee.sa_family {
+        case sa_family_t(AF_INET): return socklen_t(MemoryLayout<sockaddr_in>.size)
+        case sa_family_t(AF_INET6): return socklen_t(MemoryLayout<sockaddr_in6>.size)
+        default: return socklen_t(MemoryLayout<sockaddr_storage>.size)
+        }
+        #endif
+    }
+
     /// Loopback and wildcard addresses are never worth publishing. This matters when the
-    /// reporter runs on the collector's own Mac: the route lookup correctly returns
+    /// reporter runs on the collector's own machine: the route lookup correctly returns
     /// 127.0.0.1, which is useless to anyone reading the dashboard.
     public static func isUnroutable(_ address: String) -> Bool {
         if address.hasPrefix("127.") { return true }
