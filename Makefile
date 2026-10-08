@@ -11,8 +11,11 @@
 PREFIX        ?= /usr/local
 DEPLOY_TARGET  = 13.0
 DIST_BIN       = dist/bin
-ARM_DIR        = .build/arm64-apple-macosx/release
-X86_DIR        = .build/x86_64-apple-macosx/release
+# Each slice gets its own scratch path. Since Swift 6.4 SwiftPM's default build system
+# puts every release build in .build/out/Products/Release regardless of --triple, so a
+# shared scratch path would let the second slice overwrite the first.
+ARM_BUILD      = swift build $(SWIFT_FLAGS) -c release --triple arm64-apple-macosx$(DEPLOY_TARGET) --scratch-path .build/universal-arm64
+X86_BUILD      = swift build $(SWIFT_FLAGS) -c release --triple x86_64-apple-macosx$(DEPLOY_TARGET) --scratch-path .build/universal-x86_64
 
 # Extra flags for every swift invocation. Some sandboxed CI environments need
 # SWIFT_FLAGS=--disable-sandbox, because SwiftPM sandboxes manifest evaluation itself
@@ -69,11 +72,13 @@ build:
 	swift build $(SWIFT_FLAGS)
 
 release:
-	swift build $(SWIFT_FLAGS) -c release --triple arm64-apple-macosx$(DEPLOY_TARGET)
-	swift build $(SWIFT_FLAGS) -c release --triple x86_64-apple-macosx$(DEPLOY_TARGET)
+	$(ARM_BUILD)
+	$(X86_BUILD)
 	@mkdir -p $(DIST_BIN)
-	lipo -create -output $(DIST_BIN)/ipcollector $(ARM_DIR)/ipcollector $(X86_DIR)/ipcollector
-	lipo -create -output $(DIST_BIN)/ipreporter  $(ARM_DIR)/ipreporter  $(X86_DIR)/ipreporter
+	@# Ask SwiftPM where it put things: the layout differs between build systems.
+	arm=$$($(ARM_BUILD) --show-bin-path) && x86=$$($(X86_BUILD) --show-bin-path) && \
+	lipo -create -output $(DIST_BIN)/ipcollector $$arm/ipcollector $$x86/ipcollector && \
+	lipo -create -output $(DIST_BIN)/ipreporter  $$arm/ipreporter  $$x86/ipreporter
 	@lipo -info $(DIST_BIN)/ipcollector $(DIST_BIN)/ipreporter
 
 release-native:
