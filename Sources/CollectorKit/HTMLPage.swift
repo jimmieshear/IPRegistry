@@ -8,8 +8,8 @@ public enum HTMLPage {
         <table>
           <thead>
             <tr>
-              <th></th><th>Host</th><th>Address</th><th>Also on</th><th>Seen from</th>
-              <th>macOS</th><th>Uptime</th><th>Last report</th><th>IP changed</th>
+              <th></th><th>Host</th><th>Address</th><th>macOS</th><th>Seen from</th>
+              <th>Uptime</th><th>Last report</th><th>IP changed</th><th>Also on</th>
             </tr>
           </thead>
           <tbody>
@@ -147,12 +147,12 @@ public enum HTMLPage {
             <td class="status"><span class="dot \(host.stale ? "down" : "up")" title="\(host.stale ? "stale" : "current")"></span></td>
             <td class="host">\(htmlEscape(host.hostname))\(localName.map { "<span class=\"sub\">\(htmlEscape($0))</span>" } ?? "")</td>
             <td class="ip">\(addressCell)</td>
-            <td class="mono muted">\(secondary.isEmpty ? "—" : htmlEscape(secondary.joined(separator: ", ")))</td>
-            <td class="mono muted">\(seenFrom)</td>
             <td class="mono muted">\(htmlEscape(host.osVersion ?? "—"))<span class="sub">\(htmlEscape(host.model ?? ""))</span></td>
+            <td class="mono muted">\(seenFrom)</td>
             <td class="mono muted">\(host.uptimeSeconds.map { htmlEscape(formatDuration($0)) } ?? "—")</td>
             <td class="mono">\(htmlEscape(host.lastReportAt.relativeDescription(from: now)))</td>
             <td class="mono muted">\(changed)</td>
+            <td class="mono muted">\(secondary.isEmpty ? "—" : htmlEscape(secondary.joined(separator: ", ")))</td>
           </tr>
         """
     }
