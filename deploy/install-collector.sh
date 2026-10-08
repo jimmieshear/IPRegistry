@@ -80,6 +80,12 @@ fi
 
 echo "loading daemon"
 launchctl bootout "system/$LABEL" 2>/dev/null || true
+# bootout returns before launchd has finished tearing the old instance down, and
+# bootstrapping over it fails with "37: Operation already in progress". Wait it out.
+for _ in {1..50}; do
+    launchctl print "system/$LABEL" >/dev/null 2>&1 || break
+    sleep 0.2
+done
 launchctl bootstrap system "$PLIST"
 
 sleep 1
